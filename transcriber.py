@@ -1,45 +1,47 @@
 #!/usr/bin/env python3
 """
 Kalimba Tab Transcriber
-Extracts kalimba tab notation from YouTube videos using Claude vision.
+Extracts kalimba tab notation from YouTube falling-notes tutorial videos.
 
 Usage:
     python transcriber.py <youtube_url> [options]
 
     python transcriber.py https://youtu.be/hrUnc15BUAU
-    python transcriber.py https://youtu.be/hrUnc15BUAU --interval 2.0 --output tabs.txt
+    python transcriber.py https://youtu.be/hrUnc15BUAU --output tabs.txt
+    python transcriber.py https://youtu.be/hrUnc15BUAU --chord-gap 1
 """
 
 import argparse
-import os
+import subprocess
 import sys
 from pathlib import Path
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Transcribe kalimba tabs from a YouTube video",
+        description="Transcribe kalimba tabs from a YouTube falling-notes video",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("url", help="YouTube video URL")
     parser.add_argument(
-        "--interval", "-i",
-        type=float,
-        default=1.0,
-        help="Frame extraction interval in seconds (default: 1.0). "
-             "Increase for longer videos to reduce API calls.",
-    )
-    parser.add_argument(
         "--output", "-o",
         help="Output file path (default: print to stdout)",
     )
     parser.add_argument(
-        "--keep-frames",
+        "--fps",
+        type=int,
+        default=4,
+        help="Frames per second to extract (default: 4). Higher = more accurate but slower.",
+    )
+    parser.add_argument(
+        "--chord-gap",
+        type=int,
+        default=0,
+        help="Frames within which simultaneous notes are grouped as a chord (default: 0).",
+    )
+    parser.add_argument(
+        "--keep-files",
         action="store_true",
         help="Keep downloaded video and frames after transcription",
     )
@@ -49,43 +51,48 @@ def main():
     )
     args = parser.parse_args()
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("Error: ANTHROPIC_API_KEY environment variable not set.", file=sys.stderr)
-        print("Copy .env.example to .env and add your API key.", file=sys.stderr)
-        sys.exit(1)
-
     from src.video_processor import VideoProcessor
-    from src.tab_detector import TabDetector
-    from src.formatter import format_transcription, print_transcription
+    from src.visual_detector import detect_notes_visual, format_events
 
     processor = VideoProcessor(work_dir=args.work_dir)
 
     try:
-        print(f"Downloading video: {args.url}")
-        video_path, frames_dir = processor.download_and_extract_frames(
-            args.url, interval=args.interval
+        print(f"Downloading: {args.url}")
+        video_path = processor.download_video(args.url)
+
+        frames_dir = processor.work_dir / "frames"
+        frames_dir.mkdir(exist_ok=True)
+        print(f"Extracting frames at {args.fps} fps...")
+        result = subprocess.run(
+            ["ffmpeg", "-i", str(video_path), "-vf", f"fps={args.fps}",
+             "-q:v", "2", str(frames_dir / "frame_%05d.jpg"), "-y"],
+            capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            print(f"ffmpeg error: {result.stderr}", file=sys.stderr)
+            sys.exit(1)
+
         frame_count = len(list(frames_dir.glob("*.jpg")))
-        print(f"Extracted {frame_count} frames (1 per {args.interval}s)")
+        print(f"Extracted {frame_count} frames")
 
-        detector = TabDetector()
-        segments = detector.analyze_frames(frames_dir)
+        print("Detecting notes...")
+        events = detect_notes_visual(str(frames_dir), chord_gap=args.chord_gap)
+        print(f"Found {len(events)} note events")
 
-        if not segments:
-            print("No kalimba tab notation detected in this video.")
-            sys.exit(0)
-
-        print(f"\nFound {len(segments)} unique tab segment(s).")
+        output = format_events(events)
 
         if args.output:
-            output_path = Path(args.output)
-            output_path.write_text(format_transcription(segments), encoding="utf-8")
-            print(f"Transcription saved to {output_path}")
+            Path(args.output).write_text(output, encoding="utf-8")
+            print(f"Saved to {args.output}")
         else:
-            print_transcription(segments)
+            print("\n" + "=" * 50)
+            print("KALIMBA TAB TRANSCRIPTION")
+            print("=" * 50 + "\n")
+            print(output)
+            print("\n" + "=" * 50)
 
     finally:
-        if not args.keep_frames:
+        if not args.keep_files:
             processor.cleanup()
 
 
