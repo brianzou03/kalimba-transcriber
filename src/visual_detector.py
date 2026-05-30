@@ -91,44 +91,55 @@ def detect_notes_visual(
 
     grouped.append((current_fi / fps, current))
 
-    # Canonicalize chord ordering: whichever order we first detect a note pair,
-    # all later occurrences of the same notes use that same order.
-    canonical: dict[frozenset, list[str]] = {}
-    result: list[tuple[float, list[str]]] = []
-    for t, notes in grouped:
-        key = frozenset(notes)
-        if key not in canonical:
-            canonical[key] = notes
-        result.append((t, canonical[key]))
-    return result
+    # Canonicalize chord ordering by tine position (left→right on the kalimba).
+    # This is determined by index in TINE_NOTES — always consistent, never depends
+    # on which frame boundary the notes happened to fall across.
+    tine_order = {note: i for i, note in enumerate(TINE_NOTES)}
+    return [
+        (t, sorted(notes, key=lambda n: tine_order[n]))
+        for t, notes in grouped
+    ]
 
 
-def format_events(events: list[tuple[float, list[str]]], phrase_gap_s: float = 1.0) -> str:
+def format_events(
+    events: list[tuple[float, list[str]]],
+    phrase_gap_s: float = 5.0,
+    line_gap_s: float = 2.0,
+) -> str:
     """
-    Format events as kalimba tab notation, inserting a blank line between phrases
-    (gaps longer than phrase_gap_s seconds) and wrapping at 8 tokens per line.
+    Format events as kalimba tab notation.
+
+    phrase_gap_s: silence this long or more → blank line between stanzas.
+    line_gap_s:   silence this long → new line within a stanza (musical phrase break).
+    Each line follows the natural phrase length of the music, not a fixed token count.
     """
     if not events:
         return ""
 
-    phrases: list[list[str]] = []
-    current_phrase: list[str] = []
+    stanzas: list[list[str]] = []
+    current_stanza: list[str] = []
+    current_line: list[str] = []
 
     prev_t = events[0][0]
     for t, notes in events:
         token = notes[0] if len(notes) == 1 else "(" + " ".join(notes) + ")"
-        if t - prev_t >= phrase_gap_s and current_phrase:
-            phrases.append(current_phrase)
-            current_phrase = []
-        current_phrase.append(token)
+        gap = t - prev_t
+
+        if gap >= phrase_gap_s and current_line:
+            current_stanza.append(" ".join(current_line))
+            stanzas.append(current_stanza)
+            current_stanza = []
+            current_line = []
+        elif gap >= line_gap_s and current_line:
+            current_stanza.append(" ".join(current_line))
+            current_line = []
+
+        current_line.append(token)
         prev_t = t
 
-    if current_phrase:
-        phrases.append(current_phrase)
+    if current_line:
+        current_stanza.append(" ".join(current_line))
+    if current_stanza:
+        stanzas.append(current_stanza)
 
-    stanzas = []
-    for tokens in phrases:
-        lines = [" ".join(tokens[i:i+8]) for i in range(0, len(tokens), 8)]
-        stanzas.append("\n".join(lines))
-
-    return "\n\n".join(stanzas)
+    return "\n\n".join("\n".join(lines) for lines in stanzas)

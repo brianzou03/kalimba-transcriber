@@ -50,7 +50,13 @@ def main():
         "--phrase-gap",
         type=float,
         default=5.0,
-        help="Seconds of silence that mark a new phrase/stanza in the output (default: 5.0).",
+        help="Seconds of silence that start a new stanza (blank line) in the output (default: 5.0).",
+    )
+    parser.add_argument(
+        "--line-gap",
+        type=float,
+        default=2.0,
+        help="Seconds of silence that start a new line within a stanza (default: 2.0).",
     )
     parser.add_argument(
         "--keep-files",
@@ -98,7 +104,7 @@ def main():
         events = detect_notes_visual(str(frames_dir), fps=args.fps, chord_gap_ms=args.chord_gap)
         print(f"Found {len(events)} note events")
 
-        output = format_events(events, phrase_gap_s=args.phrase_gap)
+        output = format_events(events, phrase_gap_s=args.phrase_gap, line_gap_s=args.line_gap)
 
         out_path = Path(args.output) if args.output else TABS_DIR / f"{title}.txt"
         out_path.parent.mkdir(parents=True, exist_ok=True)
