@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 TABS_DIR = Path(__file__).parent / "tabs"
-SUPPORTED = (".xml", ".mxl", ".musicxml", ".mid", ".midi")
+SUPPORTED = (".xml", ".mxl", ".musicxml", ".mid", ".midi", ".pdf")
 
 
 def main():
@@ -60,37 +60,33 @@ def main():
     if not args.file:
         all_files = sorted(sheets_dir.iterdir()) if sheets_dir.exists() else []
         supported_files = [f for f in all_files if f.suffix.lower() in SUPPORTED]
-        pdf_files = [f for f in all_files if f.suffix.lower() == ".pdf"]
 
-        if not supported_files and not pdf_files:
+        if not supported_files:
             print(f"No sheet music files found in {sheets_dir}/")
-            print("Add .xml, .mxl, .musicxml, .mid, or .midi files and re-run.")
+            print("Add .pdf, .xml, .mxl, .musicxml, .mid, or .midi files and re-run.")
             sys.exit(0)
 
-        if supported_files:
-            print(f"Sheet music files in {sheets_dir}/:")
-            for f in supported_files:
-                print(f"  {f.name}")
-            print("\nRun: python sheet_transcriber.py sheets/<filename>")
+        from src.pdf_converter import is_installed as audiveris_installed
+        pdf_ready = audiveris_installed()
 
-        if pdf_files:
-            print(f"\nPDF files (not directly supported):")
-            for f in pdf_files:
+        print(f"Sheet music files in {sheets_dir}/:")
+        for f in supported_files:
+            if f.suffix.lower() == ".pdf":
+                status = "ready" if pdf_ready else "needs setup — run: python setup_audiveris.py"
+                print(f"  {f.name}  [{status}]")
+            else:
                 print(f"  {f.name}")
-            print("  → Open in MuseScore (free) and export as MusicXML (.musicxml)")
-
+        print("\nRun: python sheet_transcriber.py sheets/<filename>")
         sys.exit(0)
 
     file_path = Path(args.file)
 
     if file_path.suffix.lower() == ".pdf":
-        print(f"Error: PDF files cannot be read directly.")
-        print(f"To transcribe '{file_path.name}':")
-        print(f"  1. Open it in MuseScore (musescore.org — free)")
-        print(f"  2. File → Export → MusicXML (.musicxml)")
-        print(f"  3. Save the exported file to sheets/")
-        print(f"  4. Re-run: python sheet_transcriber.py sheets/{file_path.stem}.musicxml")
-        sys.exit(1)
+        from src.pdf_converter import is_installed as audiveris_installed
+        if not audiveris_installed():
+            print("PDF transcription requires Audiveris (one-time setup).")
+            print("Run: python setup_audiveris.py")
+            sys.exit(1)
 
     from src.sheet_transcriber import transcribe_sheet
 

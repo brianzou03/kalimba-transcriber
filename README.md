@@ -52,7 +52,8 @@ python transcriber.py https://youtu.be/hrUnc15BUAU --keep-files
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--output`, `-o` | stdout | Output file path |
+| `--output`, `-o` | `tabs/<name>.txt` | Output file path |
+| `--name`, `-n` | YouTube video title | Name for the output file |
 | `--fps` | `10` | Frames per second to extract. Higher = more accurate, slower. |
 | `--chord-gap` | `150` | Milliseconds within which notes are grouped as a chord. |
 | `--phrase-gap` | `5.0` | Seconds of silence that start a new stanza in the output. |
@@ -75,12 +76,21 @@ Converts piano sheet music to kalimba tab notation. Notes outside the kalimba's 
 
 ### Supported Formats
 
-| Format | Extensions | How to get |
-|--------|-----------|------------|
+| Format | Extensions | Notes |
+|--------|-----------|-------|
+| PDF | `.pdf` | Requires one-time Audiveris setup (see below) |
 | MusicXML | `.xml`, `.mxl`, `.musicxml` | Export from MuseScore, Finale, Sibelius, Noteflight |
 | MIDI | `.mid`, `.midi` | Any DAW, MuseScore, or online converters |
 
-> **PDFs are not directly supported.** Open the PDF in [MuseScore](https://musescore.org) (free), then export as MusicXML.
+### PDF Setup (one time)
+
+PDF support uses [Audiveris](https://github.com/Audiveris/audiveris), a free open-source OMR engine. Install it once:
+
+```bash
+python setup_audiveris.py
+```
+
+This downloads Audiveris (~75MB) and opens the installer. Drag it to Applications when prompted. After that, PDFs are transcribed automatically.
 
 ### Setup
 

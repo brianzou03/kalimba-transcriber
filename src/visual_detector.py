@@ -90,7 +90,17 @@ def detect_notes_visual(
             current_fi = fi
 
     grouped.append((current_fi / fps, current))
-    return grouped
+
+    # Canonicalize chord ordering: whichever order we first detect a note pair,
+    # all later occurrences of the same notes use that same order.
+    canonical: dict[frozenset, list[str]] = {}
+    result: list[tuple[float, list[str]]] = []
+    for t, notes in grouped:
+        key = frozenset(notes)
+        if key not in canonical:
+            canonical[key] = notes
+        result.append((t, canonical[key]))
+    return result
 
 
 def format_events(events: list[tuple[float, list[str]]], phrase_gap_s: float = 1.0) -> str:

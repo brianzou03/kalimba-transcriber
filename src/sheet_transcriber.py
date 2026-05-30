@@ -150,7 +150,8 @@ def transcribe_sheet(
     Transcribe a piano sheet music file to kalimba tab notation.
 
     Args:
-        file_path: Path to a MusicXML (.xml, .mxl, .musicxml) or MIDI (.mid, .midi) file.
+        file_path: Path to a MusicXML (.xml, .mxl, .musicxml), MIDI (.mid, .midi),
+                   or PDF (.pdf) file. PDFs require Audiveris (run setup_audiveris.py once).
         chord_gap_s: Notes within this many seconds are grouped as a chord (default 80ms).
         phrase_gap_s: Gap in seconds that marks a new phrase/stanza (default 2s).
 
@@ -162,9 +163,19 @@ def transcribe_sheet(
         raise FileNotFoundError(f"File not found: {file_path}")
 
     suffix = path.suffix.lower()
-    if suffix in (".xml", ".mxl", ".musicxml"):
+
+    if suffix == ".pdf":
+        from src.pdf_converter import convert_pdf_to_musicxml
+        print(f"Converting PDF via Audiveris OMR...")
+        mxl_path = convert_pdf_to_musicxml(str(path))
+        print(f"Converted to: {mxl_path}")
+        return _transcribe_musicxml(mxl_path, chord_gap_s, phrase_gap_s)
+    elif suffix in (".xml", ".mxl", ".musicxml"):
         return _transcribe_musicxml(path, chord_gap_s, phrase_gap_s)
     elif suffix in (".mid", ".midi"):
         return _transcribe_midi(path, chord_gap_s, phrase_gap_s)
     else:
-        raise ValueError(f"Unsupported file type '{suffix}'. Use .xml, .mxl, .musicxml, .mid, or .midi")
+        raise ValueError(
+            f"Unsupported file type '{suffix}'. "
+            "Use .pdf, .xml, .mxl, .musicxml, .mid, or .midi"
+        )

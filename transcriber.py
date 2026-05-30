@@ -28,7 +28,11 @@ def main():
     parser.add_argument("url", help="YouTube video URL")
     parser.add_argument(
         "--output", "-o",
-        help="Output file path (default: tabs/<video_title>.txt)",
+        help="Output file path (default: tabs/<name>.txt)",
+    )
+    parser.add_argument(
+        "--name", "-n",
+        help="Name for the output file (default: fetched from YouTube title)",
     )
     parser.add_argument(
         "--fps",
@@ -65,9 +69,12 @@ def main():
     processor = VideoProcessor(work_dir=args.work_dir)
 
     try:
-        print(f"Fetching title: {args.url}")
-        title = processor.get_video_title(args.url)
-        print(f"Title: {title}")
+        if args.name:
+            title = args.name
+        else:
+            print(f"Fetching title: {args.url}")
+            title = processor.get_video_title(args.url)
+            print(f"Title: {title}")
 
         print(f"Downloading video...")
         video_path = processor.download_video(args.url)
