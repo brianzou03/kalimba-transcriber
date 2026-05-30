@@ -39,16 +39,46 @@ _TINE_NOTES_ORDER = ["2''", "7'", "5'", "3'", "1'", "6", "4", "2", "1", "3", "5"
                      "2'", "4'", "6'", "1''", "3''"]
 _TINE_ORDER: dict[str, int] = {note: i for i, note in enumerate(_TINE_NOTES_ORDER)}
 
-# Preferred MIDI ceiling for melody: notes above B5 are transposed down one octave
-# so the melody sits in the natural kalimba playing range (C4–B5)
-_MELODY_MAX_MIDI = 83  # B5
-
-
-def _clamp_to_melody_range(midi: int) -> int:
-    """Transpose a MIDI note down by octaves until it's within the preferred melody range."""
-    while midi > _MELODY_MAX_MIDI:
+def _clamp_midi(midi: int, max_midi: int = 81, min_midi: int = 60) -> int:
+    """Transpose a MIDI note by octaves into [min_midi, max_midi]."""
+    while midi > max_midi:
         midi -= 12
+    while midi < min_midi:
+        midi += 12
     return midi
+
+
+def _detect_key_transpose(score) -> int:
+    """
+    Return semitones to add to every note so the piece plays in C major on the kalimba.
+    Reads the key signature (sharps/flats count) from each part — more reliable than
+    algorithmic key estimation which can confuse e.g. Ab major with A major.
+    """
+    import music21
+    try:
+        # Key signatures live inside parts, not on the score root
+        ks = None
+        for part in score.parts:
+            kss = part.flatten().getElementsByClass(music21.key.KeySignature)
+            if kss:
+                ks = kss[0]
+                break
+
+        if ks is not None:
+            # Use cycle-of-fifths formula: each sharp adds 7 semitones (mod 12) to tonic
+            # sharps<0 means flats; Ab major = sharps=-4 → tonic pitchClass = (-4*7)%12 = 8
+            tonic_pc = (ks.sharps * 7) % 12
+        else:
+            key_obj = score.analyze('key')
+            tonic_pc = key_obj.tonic.pitchClass
+    except Exception:
+        return 0
+
+    # Shortest path from tonic to C (pitch class 0)
+    semitones = (-tonic_pc) % 12
+    if semitones > 6:
+        semitones -= 12
+    return semitones
 
 
 def midi_to_tab(midi_note: int) -> str:
@@ -105,10 +135,7 @@ def _midi_to_seconds(offset_in_quarter_notes: float, score) -> float:
 
 
 def _extract_melody_events(part, score) -> list[tuple[float, int]]:
-    """
-    Extract (time_s, midi_pitch) pairs from a part, taking only the highest
-    pitch at each position (melody note).
-    """
+    """Extract (time_s, midi) pairs taking the highest pitch at each position."""
     import music21
     events = []
     for el in part.flatten().getElementsByClass(["Note", "Chord"]):
@@ -116,9 +143,22 @@ def _extract_melody_events(part, score) -> list[tuple[float, int]]:
         t = _midi_to_seconds(offset, score)
         if isinstance(el, music21.note.Note):
             events.append((t, el.pitch.midi))
-        else:  # Chord — take the highest pitch (melody)
-            top = max(p.midi for p in el.pitches)
-            events.append((t, top))
+        else:
+            events.append((t, max(p.midi for p in el.pitches)))
+    return events
+
+
+def _extract_bass_events(part, score) -> list[tuple[float, int]]:
+    """Extract (time_s, midi) pairs taking the LOWEST pitch at each position (bass root)."""
+    import music21
+    events = []
+    for el in part.flatten().getElementsByClass(["Note", "Chord"]):
+        offset = float(el.getOffsetInHierarchy(part))
+        t = _midi_to_seconds(offset, score)
+        if isinstance(el, music21.note.Note):
+            events.append((t, el.pitch.midi))
+        else:
+            events.append((t, min(p.midi for p in el.pitches)))
     return events
 
 
@@ -130,33 +170,40 @@ def _transcribe_musicxml(path: Path, chord_gap_s: float, phrase_gap_s: float) ->
     if not parts:
         return ""
 
+    transpose = _detect_key_transpose(score)
+    if transpose:
+        print(f"Detected key: transposing by {transpose:+d} semitones to C major")
+
     # Treble part = part 0 (right hand melody)
     # Bass part = part 1 (left hand accompaniment), optional
     treble_events = _extract_melody_events(parts[0], score)
-    bass_events = _extract_melody_events(parts[1], score) if len(parts) > 1 else []
+    bass_events = _extract_bass_events(parts[1], score) if len(parts) > 1 else []
 
-    # Merge treble (melody) with bass (lowest note at same time = one accompaniment note)
-    # Build a timeline: for each beat, take melody + optional bass
     all_times = sorted({t for t, _ in treble_events} | {t for t, _ in bass_events})
 
     treble_map: dict[float, int] = {}
     for t, midi in treble_events:
-        # Keep highest pitch per timestamp, then clamp to melody range
         treble_map[t] = max(treble_map.get(t, 0), midi)
 
     bass_map: dict[float, int] = {}
     for t, midi in bass_events:
         bass_map[t] = min(bass_map.get(t, midi), midi)
 
-    # Build events: melody note + bass note if they differ
+    # Build events: melody + bass, transposed to C major then clamped to playable range.
+    # When treble and bass coincide (chord/accompaniment context), clamp treble tighter
+    # (max G5=79) so pickup notes land in the same octave as the accompaniment.
+    # Standalone melody notes use a wider ceiling (A5=81) to preserve high phrases.
     raw_events: list[tuple[float, list[str]]] = []
     for t in all_times:
         notes = []
+        has_bass = t in bass_map
         if t in treble_map:
-            melody_midi = _clamp_to_melody_range(treble_map[t])
+            treble_max = 79 if has_bass else 81
+            melody_midi = _clamp_midi(treble_map[t] + transpose, max_midi=treble_max)
             notes.append(midi_to_tab(melody_midi))
-        if t in bass_map:
-            bass_tab = midi_to_tab(bass_map[t])
+        if has_bass:
+            bass_midi = _clamp_midi(bass_map[t] + transpose)
+            bass_tab = midi_to_tab(bass_midi)
             if bass_tab not in notes:
                 notes.append(bass_tab)
         notes = list(dict.fromkeys(notes))[:2]

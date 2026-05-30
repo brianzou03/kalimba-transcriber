@@ -36,8 +36,18 @@ def convert_pdf_to_musicxml(pdf_path: str, output_dir: str | None = None) -> Pat
     if not pdf.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    work_dir = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(prefix="audiveris_"))
-    work_dir.mkdir(parents=True, exist_ok=True)
+    # Cache the MXL next to the PDF so Audiveris only runs once per sheet
+    if output_dir:
+        work_dir = Path(output_dir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        work_dir = pdf.parent / (pdf.stem + "_audiveris")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        # Return cached result if it exists
+        cached = list(work_dir.glob("*.mxl")) + list(work_dir.glob("*.xml"))
+        if cached:
+            print(f"Using cached MusicXML: {cached[0]}")
+            return cached[0]
 
     result = subprocess.run(
         [str(AUDIVERIS_BIN), "-batch", "-export", "-output", str(work_dir), str(pdf)],
@@ -49,7 +59,6 @@ def convert_pdf_to_musicxml(pdf_path: str, output_dir: str | None = None) -> Pat
     if result.returncode != 0:
         raise RuntimeError(f"Audiveris failed:\n{result.stderr}")
 
-    # Audiveris outputs <stem>.mxl in the output dir
     mxl_files = list(work_dir.glob("*.mxl")) + list(work_dir.glob("*.xml"))
     if not mxl_files:
         raise RuntimeError(
