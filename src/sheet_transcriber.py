@@ -34,14 +34,34 @@ KALIMBA_NOTES: list[tuple[int, str]] = [
 _MIDI_TO_TAB: dict[int, str] = {midi: tab for midi, tab in KALIMBA_NOTES}
 _ALL_MIDI = [midi for midi, _ in KALIMBA_NOTES]
 
+# Physical left→right tine order on a 17-key kalimba (used for consistent chord notation)
+_TINE_NOTES_ORDER = ["2''", "7'", "5'", "3'", "1'", "6", "4", "2", "1", "3", "5", "7",
+                     "2'", "4'", "6'", "1''", "3''"]
+_TINE_ORDER: dict[str, int] = {note: i for i, note in enumerate(_TINE_NOTES_ORDER)}
+
+# Preferred MIDI ceiling for melody: notes above B5 are transposed down one octave
+# so the melody sits in the natural kalimba playing range (C4–B5)
+_MELODY_MAX_MIDI = 83  # B5
+
+
+def _clamp_to_melody_range(midi: int) -> int:
+    """Transpose a MIDI note down by octaves until it's within the preferred melody range."""
+    while midi > _MELODY_MAX_MIDI:
+        midi -= 12
+    return midi
+
 
 def midi_to_tab(midi_note: int) -> str:
-    """Map any MIDI note to the nearest kalimba tab, transposing by octaves if needed."""
+    """Map any MIDI note to the nearest kalimba tab."""
     if midi_note in _MIDI_TO_TAB:
         return _MIDI_TO_TAB[midi_note]
-    # Find closest kalimba note by semitone distance
     best = min(_ALL_MIDI, key=lambda m: abs(m - midi_note))
     return _MIDI_TO_TAB[best]
+
+
+def _sort_chord(notes: list[str]) -> list[str]:
+    """Sort chord notes by ascending physical tine index (left→right on kalimba)."""
+    return sorted(notes, key=lambda n: _TINE_ORDER.get(n, 99))
 
 
 def _format_tabs(events: list[tuple[float, list[str]]], phrase_gap_s: float = 2.0) -> str:
@@ -71,37 +91,93 @@ def _format_tabs(events: list[tuple[float, list[str]]], phrase_gap_s: float = 2.
     return "\n\n".join(stanzas)
 
 
+def _midi_to_seconds(offset_in_quarter_notes: float, score) -> float:
+    """Convert a score offset (in quarter notes) to seconds using the score's tempo map."""
+    import music21
+    try:
+        return score.secondsMap[float(offset_in_quarter_notes)]["offsetSeconds"]
+    except Exception:
+        pass
+    # Fall back: use first tempo marking
+    tempos = score.flatten().getElementsByClass(music21.tempo.MetronomeMark)
+    bpm = float(tempos[0].number) if tempos else 120.0
+    return offset_in_quarter_notes * (60.0 / bpm)
+
+
+def _extract_melody_events(part, score) -> list[tuple[float, int]]:
+    """
+    Extract (time_s, midi_pitch) pairs from a part, taking only the highest
+    pitch at each position (melody note).
+    """
+    import music21
+    events = []
+    for el in part.flatten().getElementsByClass(["Note", "Chord"]):
+        offset = float(el.getOffsetInHierarchy(part))
+        t = _midi_to_seconds(offset, score)
+        if isinstance(el, music21.note.Note):
+            events.append((t, el.pitch.midi))
+        else:  # Chord — take the highest pitch (melody)
+            top = max(p.midi for p in el.pitches)
+            events.append((t, top))
+    return events
+
+
 def _transcribe_musicxml(path: Path, chord_gap_s: float, phrase_gap_s: float) -> str:
     import music21
     score = music21.converter.parse(str(path))
 
-    # Flatten to a single stream of notes/chords with offsets in seconds
-    flat = score.flatten().getElementsByClass(["Note", "Chord"])
+    parts = score.parts
+    if not parts:
+        return ""
 
-    events: list[tuple[float, list[str]]] = []
-    prev_t: float | None = None
+    # Treble part = part 0 (right hand melody)
+    # Bass part = part 1 (left hand accompaniment), optional
+    treble_events = _extract_melody_events(parts[0], score)
+    bass_events = _extract_melody_events(parts[1], score) if len(parts) > 1 else []
 
-    for el in flat:
-        try:
-            t = float(el.getOffsetInHierarchy(score.flatten()))
-        except Exception:
-            continue
+    # Merge treble (melody) with bass (lowest note at same time = one accompaniment note)
+    # Build a timeline: for each beat, take melody + optional bass
+    all_times = sorted({t for t, _ in treble_events} | {t for t, _ in bass_events})
 
-        if isinstance(el, music21.note.Note):
-            tabs = [midi_to_tab(el.pitch.midi)]
-        else:  # Chord
-            tabs = [midi_to_tab(p.midi) for p in el.pitches]
-            tabs = list(dict.fromkeys(tabs))  # deduplicate while preserving order
+    treble_map: dict[float, int] = {}
+    for t, midi in treble_events:
+        # Keep highest pitch per timestamp, then clamp to melody range
+        treble_map[t] = max(treble_map.get(t, 0), midi)
 
-        if prev_t is not None and t - prev_t < chord_gap_s and events:
-            for tab in tabs:
-                if tab not in events[-1][1]:
-                    events[-1][1].append(tab)
+    bass_map: dict[float, int] = {}
+    for t, midi in bass_events:
+        bass_map[t] = min(bass_map.get(t, midi), midi)
+
+    # Build events: melody note + bass note if they differ
+    raw_events: list[tuple[float, list[str]]] = []
+    for t in all_times:
+        notes = []
+        if t in treble_map:
+            melody_midi = _clamp_to_melody_range(treble_map[t])
+            notes.append(midi_to_tab(melody_midi))
+        if t in bass_map:
+            bass_tab = midi_to_tab(bass_map[t])
+            if bass_tab not in notes:
+                notes.append(bass_tab)
+        notes = list(dict.fromkeys(notes))[:2]
+        if notes:
+            raw_events.append((t, _sort_chord(notes)))
+
+    # Merge events that are within chord_gap_s of each other
+    if not raw_events:
+        return ""
+
+    merged: list[tuple[float, list[str]]] = [raw_events[0]]
+    for t, notes in raw_events[1:]:
+        if t - merged[-1][0] < chord_gap_s:
+            for n in notes:
+                if n not in merged[-1][1] and len(merged[-1][1]) < 2:
+                    merged[-1][1].append(n)
+            merged[-1] = (merged[-1][0], _sort_chord(merged[-1][1]))
         else:
-            events.append((t, tabs))
-        prev_t = t
+            merged.append((t, notes))
 
-    return _format_tabs(events, phrase_gap_s)
+    return _format_tabs(merged, phrase_gap_s)
 
 
 def _transcribe_midi(path: Path, chord_gap_s: float, phrase_gap_s: float) -> str:
@@ -144,7 +220,7 @@ def _transcribe_midi(path: Path, chord_gap_s: float, phrase_gap_s: float) -> str
 def transcribe_sheet(
     file_path: str,
     chord_gap_s: float = 0.08,
-    phrase_gap_s: float = 2.0,
+    phrase_gap_s: float = 4.0,
 ) -> str:
     """
     Transcribe a piano sheet music file to kalimba tab notation.
