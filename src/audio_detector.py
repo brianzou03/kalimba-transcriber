@@ -25,6 +25,25 @@ KALIMBA_FREQS = {
 SEMITONE = 2 ** (1 / 12)
 HALF_SEMITONE = SEMITONE ** 0.5
 
+# Pre-built octave-harmonic suppression map: for each tab, list the tabs that
+# are its 2nd/3rd/4th harmonic (and would be falsely detected as independent notes).
+# Built from KALIMBA_FREQS — if tab B's freq is within 5% of N×freq(tab A), B is
+# suppressed when A is already accepted.
+def _build_harmonic_map() -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {tab: set() for tab in KALIMBA_FREQS}
+    tabs = list(KALIMBA_FREQS.items())
+    for tab_a, freq_a in tabs:
+        for tab_b, freq_b in tabs:
+            if tab_a == tab_b:
+                continue
+            for n in range(2, 6):
+                if abs(freq_b - freq_a * n) / (freq_a * n) < 0.05:
+                    result[tab_a].add(tab_b)
+                    break
+    return result
+
+_HARMONIC_MAP = _build_harmonic_map()
+
 
 def freq_to_tab(freq: float) -> str | None:
     best, best_ratio = None, float("inf")
@@ -44,6 +63,22 @@ def _is_harmonic(freq: float, fundamentals: list[float], tolerance: float = 0.05
             if abs(freq - harmonic) / harmonic < tolerance:
                 return True
     return False
+
+
+def _suppress_tab_harmonics(notes: list[str]) -> list[str]:
+    """Remove notes that are octave harmonics of a lower-frequency note in the list."""
+    # Process from lowest to highest frequency so fundamentals take priority
+    ordered = sorted(notes, key=lambda t: KALIMBA_FREQS.get(t, 0))
+    suppressed: set[str] = set()
+    kept: list[str] = []
+    for tab in ordered:
+        if tab in suppressed:
+            continue
+        kept.append(tab)
+        suppressed |= _HARMONIC_MAP.get(tab, set())
+    # Restore original ordering for kept notes
+    kept_set = set(kept)
+    return [n for n in notes if n in kept_set]
 
 
 def detect_notes(wav_path: str, onset_threshold: float = 0.05, chord_window_ms: float = 60) -> list[list[str]]:
@@ -115,9 +150,14 @@ def detect_notes(wav_path: str, onset_threshold: float = 0.05, chord_window_ms: 
             for n in notes:
                 if n not in events[-1] and len(events[-1]) < 2:
                     events[-1].append(n)
+            events[-1] = _suppress_tab_harmonics(events[-1])
+            if not events[-1]:
+                events.pop()
         else:
-            events.append(notes)
-            last_time = t
+            notes = _suppress_tab_harmonics(notes)
+            if notes:
+                events.append(notes)
+                last_time = t
 
     return events
 

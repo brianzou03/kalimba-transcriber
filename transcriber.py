@@ -7,14 +7,16 @@ Usage:
     python transcriber.py <youtube_url> [options]
 
     python transcriber.py https://youtu.be/hrUnc15BUAU
-    python transcriber.py https://youtu.be/hrUnc15BUAU --output tabs.txt
-    python transcriber.py https://youtu.be/hrUnc15BUAU --chord-gap 1
+    python transcriber.py https://youtu.be/hrUnc15BUAU --output tabs/my_song.txt
+    python transcriber.py https://youtu.be/hrUnc15BUAU --chord-gap 150
 """
 
 import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+TABS_DIR = Path(__file__).parent / "tabs"
 
 
 def main():
@@ -26,19 +28,25 @@ def main():
     parser.add_argument("url", help="YouTube video URL")
     parser.add_argument(
         "--output", "-o",
-        help="Output file path (default: print to stdout)",
+        help="Output file path (default: tabs/<video_title>.txt)",
     )
     parser.add_argument(
         "--fps",
         type=int,
-        default=4,
-        help="Frames per second to extract (default: 4). Higher = more accurate but slower.",
+        default=10,
+        help="Frames per second to extract (default: 10). Higher = more accurate but slower.",
     )
     parser.add_argument(
         "--chord-gap",
-        type=int,
-        default=0,
-        help="Frames within which simultaneous notes are grouped as a chord (default: 0).",
+        type=float,
+        default=150.0,
+        help="Milliseconds within which simultaneous notes are grouped as a chord (default: 150).",
+    )
+    parser.add_argument(
+        "--phrase-gap",
+        type=float,
+        default=5.0,
+        help="Seconds of silence that mark a new phrase/stanza in the output (default: 5.0).",
     )
     parser.add_argument(
         "--keep-files",
@@ -57,7 +65,11 @@ def main():
     processor = VideoProcessor(work_dir=args.work_dir)
 
     try:
-        print(f"Downloading: {args.url}")
+        print(f"Fetching title: {args.url}")
+        title = processor.get_video_title(args.url)
+        print(f"Title: {title}")
+
+        print(f"Downloading video...")
         video_path = processor.download_video(args.url)
 
         frames_dir = processor.work_dir / "frames"
@@ -76,20 +88,15 @@ def main():
         print(f"Extracted {frame_count} frames")
 
         print("Detecting notes...")
-        events = detect_notes_visual(str(frames_dir), chord_gap=args.chord_gap)
+        events = detect_notes_visual(str(frames_dir), fps=args.fps, chord_gap_ms=args.chord_gap)
         print(f"Found {len(events)} note events")
 
-        output = format_events(events)
+        output = format_events(events, phrase_gap_s=args.phrase_gap)
 
-        if args.output:
-            Path(args.output).write_text(output, encoding="utf-8")
-            print(f"Saved to {args.output}")
-        else:
-            print("\n" + "=" * 50)
-            print("KALIMBA TAB TRANSCRIPTION")
-            print("=" * 50 + "\n")
-            print(output)
-            print("\n" + "=" * 50)
+        out_path = Path(args.output) if args.output else TABS_DIR / f"{title}.txt"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(output, encoding="utf-8")
+        print(f"Saved to {out_path}")
 
     finally:
         if not args.keep_files:

@@ -38,17 +38,24 @@ def _tine_struck(arr: np.ndarray, tine_x: int) -> bool:
     return _is_yellow(r, g, b)
 
 
-def detect_notes_visual(frames_dir: str, chord_gap: int = 1) -> list[list[str]]:
+def detect_notes_visual(
+    frames_dir: str,
+    fps: float = 10.0,
+    chord_gap_ms: float = 150.0,
+) -> list[tuple[float, list[str]]]:
     """
-    Return list of note events detected via yellow tine strike flash.
-    chord_gap: frames within which simultaneous notes are grouped as a chord.
+    Return list of (time_seconds, [notes]) events detected via yellow tine strike flash.
+    chord_gap_ms: notes within this many milliseconds are grouped as a chord.
+                  150ms catches micro-offsets without merging distinct hits.
     """
     frame_paths = sorted(Path(frames_dir).glob("frame_*.jpg"))
     if not frame_paths:
         raise RuntimeError(f"No frames found in {frames_dir}")
 
+    chord_gap_frames = chord_gap_ms / 1000.0 * fps
+
     prev_struck = [False] * len(TINE_X)
-    raw: list[tuple[int, str]] = []
+    raw: list[tuple[int, str]] = []  # (frame_index, note)
 
     for fi, path in enumerate(frame_paths):
         arr = np.array(Image.open(path))
@@ -68,28 +75,50 @@ def detect_notes_visual(frames_dir: str, chord_gap: int = 1) -> list[list[str]]:
     if not raw:
         return []
 
-    # Group into chords
-    grouped: list[list[str]] = []
+    # Group into chords using time-based window
+    grouped: list[tuple[float, list[str]]] = []
     current: list[str] = [raw[0][1]]
     current_fi = raw[0][0]
 
     for fi, note in raw[1:]:
-        if fi - current_fi <= chord_gap:
+        if fi - current_fi <= chord_gap_frames:
             if note not in current:
                 current.append(note)
         else:
-            grouped.append(current)
+            grouped.append((current_fi / fps, current))
             current = [note]
             current_fi = fi
 
-    grouped.append(current)
+    grouped.append((current_fi / fps, current))
     return grouped
 
 
-def format_events(events: list[list[str]]) -> str:
-    tokens = [
-        notes[0] if len(notes) == 1 else "(" + " ".join(notes) + ")"
-        for notes in events
-    ]
-    lines = [" ".join(tokens[i:i+8]) for i in range(0, len(tokens), 8)]
-    return "\n".join(lines)
+def format_events(events: list[tuple[float, list[str]]], phrase_gap_s: float = 1.0) -> str:
+    """
+    Format events as kalimba tab notation, inserting a blank line between phrases
+    (gaps longer than phrase_gap_s seconds) and wrapping at 8 tokens per line.
+    """
+    if not events:
+        return ""
+
+    phrases: list[list[str]] = []
+    current_phrase: list[str] = []
+
+    prev_t = events[0][0]
+    for t, notes in events:
+        token = notes[0] if len(notes) == 1 else "(" + " ".join(notes) + ")"
+        if t - prev_t >= phrase_gap_s and current_phrase:
+            phrases.append(current_phrase)
+            current_phrase = []
+        current_phrase.append(token)
+        prev_t = t
+
+    if current_phrase:
+        phrases.append(current_phrase)
+
+    stanzas = []
+    for tokens in phrases:
+        lines = [" ".join(tokens[i:i+8]) for i in range(0, len(tokens), 8)]
+        stanzas.append("\n".join(lines))
+
+    return "\n\n".join(stanzas)

@@ -9,6 +9,17 @@ class VideoProcessor:
         self.work_dir = Path(work_dir) if work_dir else Path(tempfile.mkdtemp(prefix="kalimba_"))
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
+    def get_video_title(self, url: str) -> str:
+        result = subprocess.run(
+            ["yt-dlp", "--get-title", "--no-playlist", url],
+            capture_output=True, text=True,
+        )
+        title = result.stdout.strip().splitlines()[0] if result.returncode == 0 else ""
+        # Sanitize for use as a filename
+        for ch in r'\/:*?"<>|':
+            title = title.replace(ch, "_")
+        return title or "kalimba"
+
     def download_video(self, url: str) -> Path:
         video_path = self.work_dir / "video.mp4"
         cmd = [
